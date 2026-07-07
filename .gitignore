@@ -1,0 +1,11 @@
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / dependency folders
+node_modules/
+*.log
+
+# Local Claude Code config
+.claude/

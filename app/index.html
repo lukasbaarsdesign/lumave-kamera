@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <title>Lumave — Deine Hochzeitskamera</title>
+  <meta name="description" content="Die analoge Einwegkamera fürs Gästehandy. 24 Aufnahmen, ein gemeinsamer Look – sichtbar erst 48 Stunden später." />
+  <meta name="theme-color" content="#040404" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <style>html,body{background:#040404;}</style>
+  <link rel="preload" href="../assets/fonts/HostGrotesk.ttf" as="font" type="font/ttf" crossorigin />
+  <link rel="stylesheet" href="app.css?v=2" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <main class="app" id="app">
+
+    <!-- ================= JOIN ================= -->
+    <section class="view view--join is-active" id="viewJoin" aria-label="Der Hochzeit beitreten">
+      <div class="join">
+        <img class="join__logo" src="../assets/logo/lumave-logo-text.svg" alt="Lumave" />
+        <span class="eyebrow eyebrow--center">Du bist eingeladen</span>
+        <h1 class="join__title" id="joinTitle">Willkommen bei&nbsp;<em class="accent-serif" id="coupleName">Julia &amp; Max</em></h1>
+        <p class="join__sub">
+          Deine analoge Einwegkamera für heute. <strong style="color:var(--text);font-weight:600">24 Aufnahmen</strong>,
+          ein gemeinsamer Look – und sichtbar werden sie erst zwei Tage später.
+        </p>
+
+        <form class="join__form" id="joinForm" novalidate>
+          <label class="field">
+            <span class="field__label">Dein Name</span>
+            <input id="nameInput" name="name" type="text" inputmode="text" autocomplete="name"
+                   autocapitalize="words" placeholder="z.&nbsp;B. Anna Sommer" required
+                   aria-describedby="nameError" />
+          </label>
+          <p class="field__error" id="nameError" role="alert" aria-live="polite"></p>
+          <button class="btn btn--primary btn--block" type="submit" id="joinBtn">
+            <span class="btn__label">Der Hochzeit beitreten</span>
+            <span class="btn__icon" aria-hidden="true">→</span>
+          </button>
+        </form>
+
+        <p class="join__micro">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <path d="M3 8.5A1.5 1.5 0 0 1 4.5 7H7l1.2-1.8A1 1 0 0 1 9 4.8h6a1 1 0 0 1 .8.4L17 7h2.5A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/>
+            <circle cx="12" cy="13" r="3.4"/>
+          </svg>
+          Keine App, kein Download. Läuft direkt im Browser.
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= CAMERA ================= -->
+    <section class="view view--camera" id="viewCamera" aria-label="Kamera">
+      <header class="cam-top">
+        <img class="cam-top__logo" src="../assets/logo/lumave-logo-text.svg" alt="Lumave" />
+        <button class="icon-btn" id="flipBtn" type="button" aria-label="Kamera wechseln (Vorder-/Rückkamera)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7h3l1.5-2h9L18 7h3v12H3z"/><path d="M9.5 13.5 8 12l-1.5 1.5"/>
+            <path d="M6.2 13a6 6 0 0 1 10.3-3.2"/><path d="M14.5 10.5 16 12l1.5-1.5"/>
+            <path d="M17.8 11a6 6 0 0 1-10.3 3.2"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="viewfinder" id="viewfinder">
+        <video id="camVideo" playsinline muted autoplay></video>
+        <canvas class="vf-fallback" id="fallbackCanvas" width="1080" height="1350" aria-hidden="true"></canvas>
+
+        <span class="vf-recdot" aria-hidden="true">Analog</span>
+        <div class="vf-vignette" aria-hidden="true"></div>
+        <div class="vf-frame" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div class="vf-center" aria-hidden="true"></div>
+
+        <div class="shutter-blink" id="shutterBlink" aria-hidden="true"></div>
+        <div class="flash-overlay" id="flashOverlay" aria-hidden="true"></div>
+
+        <div class="vf-status" id="camStatus" role="status" aria-live="polite">
+          <div class="spinner" id="camSpinner"></div>
+          <div class="vf-status__icon" id="camStatusIcon" hidden></div>
+          <h2 id="camStatusTitle">Kamera wird gestartet…</h2>
+          <p id="camStatusText">Einen Moment – wir aktivieren deinen Sucher.</p>
+          <button class="btn btn--primary" id="camRetry" type="button" hidden>
+            <span class="btn__label">Kamera erlauben</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="cam-bottom">
+        <div class="counter" aria-live="polite">
+          <span class="counter__num" id="counterNum">24</span>
+          <span class="counter__slash">/</span>
+          <span class="counter__total">24</span>
+          <span class="counter__label">übrig</span>
+        </div>
+
+        <div class="controls">
+          <!-- Flash -->
+          <button class="ctrl" id="flashBtn" type="button" aria-label="Blitz: Automatik" aria-pressed="false">
+            <span class="ctrl__ico" id="flashIco">
+              <!-- icon injected by JS -->
+            </span>
+            <span class="ctrl__label" id="flashLabel">Auto</span>
+          </button>
+
+          <!-- Shutter -->
+          <button class="shutter" id="shutterBtn" type="button" aria-label="Foto auslösen">
+            <span class="shutter__core" aria-hidden="true"></span>
+          </button>
+
+          <!-- Gallery / development -->
+          <button class="ctrl ctrl--gallery" id="galleryBtn" type="button" aria-label="Entwicklung ansehen">
+            <span class="thumb is-empty" id="galleryThumb"><img id="galleryThumbImg" alt="" hidden /></span>
+            <span class="badge is-hidden" id="galleryBadge"></span>
+            <span class="ctrl__label">Filme</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= GALLERY / DEVELOPMENT ================= -->
+    <section class="view view--gallery" id="viewGallery" aria-label="Entwicklung">
+      <header class="g-top">
+        <button class="icon-btn" id="galleryBack" type="button" aria-label="Zurück zur Kamera">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
+        <div class="g-top__title">
+          <strong>In Entwicklung</strong>
+          <span id="galleryCountLabel">0 Aufnahmen</span>
+        </div>
+        <button class="icon-btn" id="galleryToCam" type="button" aria-label="Weiter fotografieren">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5A1.5 1.5 0 0 1 4.5 7H7l1.2-1.8A1 1 0 0 1 9 4.8h6a1 1 0 0 1 .8.4L17 7h2.5A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/><circle cx="12" cy="13" r="3.4"/></svg>
+        </button>
+      </header>
+
+      <div class="develop-scroll" id="developScroll">
+        <div class="g-note">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <span>Wie bei einem echten Film entwickeln sich deine Bilder erst nach <strong style="color:var(--text)" id="developDurationText">48&nbsp;Stunden</strong>. Bis dahin bleiben sie verschwommen – gutes Warten.</span>
+        </div>
+        <div class="develop-grid" id="developGrid"></div>
+      </div>
+
+      <div class="g-empty" id="galleryEmpty">
+        <div class="g-empty__ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5A1.5 1.5 0 0 1 4.5 7H7l1.2-1.8A1 1 0 0 1 9 4.8h6a1 1 0 0 1 .8.4L17 7h2.5A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/><circle cx="12" cy="13" r="3.4"/></svg>
+        </div>
+        <h2>Noch keine Aufnahmen</h2>
+        <p>Löse dein erstes Foto aus – hier siehst du, wie es sich langsam entwickelt.</p>
+        <button class="btn btn--primary" id="emptyToCam" type="button"><span class="btn__label">Zur Kamera</span></button>
+      </div>
+    </section>
+
+    <!-- Lightbox for revealed photos -->
+    <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Foto ansehen">
+      <button class="lightbox__close" id="lightboxClose" type="button" aria-label="Schließen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <img id="lightboxImg" alt="Entwickeltes Hochzeitsfoto" />
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </main>
+
+  <script src="app.js?v=2"></script>
+</body>
+</html>

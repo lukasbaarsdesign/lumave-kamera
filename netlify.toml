@@ -1,0 +1,5 @@
+# Lumave Kamera-App — statisch, kein Build-Schritt.
+# Netlify liefert die Wurzel des Repos aus (index.html leitet auf ./app/ weiter).
+[build]
+  publish = "."
+  command = ""
