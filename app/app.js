@@ -830,11 +830,15 @@
     updateCounter();
     updateGalleryButton();
 
-    // Returning guest? Pre-fill on the join screen; ensure a stable guestId exists.
+    // Bereits beigetretener Gast? In derselben Session bleiben: direkt zur Kamera,
+    // NICHT erneut "beitreten" lassen. Sonst würde bei jedem Reload für dieselbe
+    // Person ein neuer Drive-Ordner entstehen. Die guestId bleibt stabil im
+    // localStorage, damit alle Fotos im selben Gast-Ordner landen.
     const g = loadGuest();
     if (g && g.name) {
       if (!g.guestId) { g.guestId = genId(); saveGuest(g); }
       state.guest = g;
+      if (g.consentAt) show("camera"); // schon beigetreten → Sucher direkt öffnen
     }
 
     // Noch nicht hochgeladene Fotos (Offline/Fehler) im Hintergrund nachreichen.
