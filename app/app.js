@@ -10,10 +10,10 @@
   const MAX_SHOTS = 24;
   const params = new URLSearchParams(location.search);
   // Entwicklungszeit, bis Fotos sichtbar werden.
-  // Aktueller Test-Stand: 20 Sekunden. Für die echten 48 Stunden: ?real=1 an die URL.
+  // Standard: 48 Stunden. Für einen schnellen Reveal-Test: ?demo=1 → 20 Sekunden.
   const REAL_DEVELOP_MS = 48 * 60 * 60 * 1000;
   const TEST_DEVELOP_MS = 20 * 1000;
-  const DEVELOP_MS = params.has("real") ? REAL_DEVELOP_MS : TEST_DEVELOP_MS;
+  const DEVELOP_MS = params.has("demo") ? TEST_DEVELOP_MS : REAL_DEVELOP_MS;
   const CAPTURE_W = 1080;
   const CAPTURE_H = 1350; // 4:5 film frame
   const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -183,16 +183,30 @@
     const form = $("joinForm");
     const input = $("nameInput");
     const err = $("nameError");
+    const consent = $("consentCheck");
+    const btn = $("joinBtn");
 
     const existing = loadGuest();
-    if (existing && existing.name) {
-      input.value = existing.name;
+    if (existing && existing.name) input.value = existing.name;
+    if (existing && existing.consentAt) consent.checked = true;
+
+    const nameOk = () => input.value.trim().length >= 2;
+
+    // Button bleibt ausgegraut, bis Name eingegeben UND Datenschutz/AGB bestätigt sind.
+    function updateJoinButton() {
+      btn.disabled = !(nameOk() && consent.checked);
     }
 
     on(input, "input", () => {
       err.classList.remove("is-visible");
       input.setAttribute("aria-invalid", "false");
+      updateJoinButton();
     });
+    on(consent, "change", () => {
+      if (consent.checked) err.classList.remove("is-visible");
+      updateJoinButton();
+    });
+    updateJoinButton();
 
     on(form, "submit", (e) => {
       e.preventDefault();
@@ -204,9 +218,14 @@
         input.focus();
         return;
       }
+      if (!consent.checked) {
+        err.textContent = "Bitte stimme Datenschutz und AGB zu, um beizutreten.";
+        err.classList.add("is-visible");
+        return;
+      }
       state.guest = existing && existing.joinedAt
-        ? { ...existing, name }
-        : { name, joinedAt: Date.now() };
+        ? { ...existing, name, consentAt: existing.consentAt || Date.now() }
+        : { name, joinedAt: Date.now(), consentAt: Date.now() };
       saveGuest(state.guest);
       input.blur();
       haptic(12);
