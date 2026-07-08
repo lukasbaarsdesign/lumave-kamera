@@ -750,6 +750,26 @@ input { font: inherit; }
   letter-spacing: 0.12em;
   color: rgba(255,255,255,0.6);
 }
+
+/* Google-Drive-Upload-Status */
+.dev-cell__up {
+  position: absolute;
+  z-index: 3;
+  left: 8px; top: 8px;
+  width: 24px; height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: rgba(4,4,4,0.55);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  color: var(--text-mute);
+}
+.dev-cell__up svg { width: 15px; height: 15px; }
+.dev-cell__up[data-status="up"] { color: var(--text); animation: upPulse 1.2s var(--ease-in-out) infinite; }
+.dev-cell__up[data-status="done"] { color: var(--accent-ink); background: var(--accent); }
+@keyframes upPulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
 /* progress ring bottom */
 .dev-cell__bar {
   position: absolute;

@@ -14,6 +14,16 @@
   const REAL_DEVELOP_MS = 48 * 60 * 60 * 1000;
   const TEST_DEVELOP_MS = 20 * 1000;
   const DEVELOP_MS = params.has("demo") ? TEST_DEVELOP_MS : REAL_DEVELOP_MS;
+
+  /* ---------- Foto-Upload zu Google Drive (Apps Script Web App) ----------
+     Jedes Foto wird zusätzlich zur lokalen Speicherung in einen Drive-Ordner
+     hochgeladen – pro Gast ein eigener Unterordner. Der Upload läuft über eine
+     Google-Apps-Script-Web-App (siehe google-apps-script/Code.gs), die unter dem
+     Konto des Ordner-Eigentümers schreibt (keine Zugangsdaten im Client).
+     >>> Nach dem Deploy hier die Web-App-URL (…/exec) eintragen. Leer = Upload aus. */
+  const UPLOAD_ENDPOINT = "https://script.google.com/macros/s/AKfycbwQ7P7hgEfF5om07Fgjh-aKPVfFaunB_bazbJssZJ8t2mZbBmwe71uKv1z12v4In0Y/exec";
+  const UPLOAD_SECRET = "lumave-2026"; // muss mit SECRET im Apps Script übereinstimmen
+  const uploadEnabled = () => /^https:\/\//.test(UPLOAD_ENDPOINT);
   const CAPTURE_W = 1080;
   const CAPTURE_H = 1350; // 4:5 film frame
   const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -96,9 +106,20 @@
 
   // In-memory fallback if IndexedDB is unavailable (private mode, etc.)
   const memStore = [];
+  function recToStore(rec) {
+    return {
+      id: rec.id, blob: rec.blob, takenAt: rec.takenAt, readyAt: rec.readyAt,
+      uploaded: !!rec.uploaded, filename: rec.filename || null,
+      guest: rec.guest || null, guestId: rec.guestId || null, seq: rec.seq || null,
+    };
+  }
   async function persistPhoto(rec) {
-    try { await idbPut({ id: rec.id, blob: rec.blob, takenAt: rec.takenAt, readyAt: rec.readyAt }); }
+    try { await idbPut(recToStore(rec)); }
     catch (e) { memStore.push(rec); }
+  }
+  async function markUploaded(rec) {
+    rec.uploaded = true;
+    try { await idbPut(recToStore(rec)); } catch (e) {}
   }
   async function loadPhotos() {
     try {
@@ -132,7 +153,80 @@
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
     hourglass:
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12M7 3c0 5 4 5 5 9 1-4 5-4 5-9M7 21c0-5 4-5 5-9 1 4 5 4 5 9"/></svg>',
+    cloud:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.4A3.5 3.5 0 0 1 18 18z"/><path d="M12 15.5v-5M9.8 12.2 12 10l2.2 2.2"/></svg>',
   };
+
+  /* ============================================================
+     UPLOAD zu Google Drive (pro Gast ein Ordner)
+     ============================================================ */
+  const pad2 = (n) => String(n).padStart(2, "0");
+  function stamp(ms) {
+    const d = new Date(ms);
+    return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) +
+      "-" + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds());
+  }
+  function genId() { return Math.random().toString(36).slice(2, 8); }
+
+  function blobToBase64(blob) {
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(",")[1] || "");
+      fr.onerror = () => rej(fr.error);
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  function setUploadStatus(id, status) {
+    const cell = document.querySelector('.dev-cell[data-id="' + id + '"] .dev-cell__up');
+    if (cell) cell.dataset.status = status; // "pending" | "up" | "done"
+  }
+
+  async function uploadPhoto(rec) {
+    if (!uploadEnabled() || rec.uploaded || rec._uploading) return false;
+    rec._uploading = true;
+    setUploadStatus(rec.id, "up");
+    try {
+      if (!rec.filename) rec.filename = "Lumave_" + stamp(rec.takenAt || Date.now()) + "_" + rec.id + ".jpg";
+      const base64 = await blobToBase64(rec.blob);
+      const payload = {
+        secret: UPLOAD_SECRET,
+        guest: rec.guest || (state.guest && state.guest.name) || "Gast",
+        guestId: rec.guestId || (state.guest && state.guest.guestId) || "anon",
+        filename: rec.filename,
+        mimeType: "image/jpeg",
+        takenAt: rec.takenAt,
+        dataBase64: base64,
+      };
+      // text/plain => "simple request", vermeidet CORS-Preflight bei Apps Script.
+      const res = await fetch(UPLOAD_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload),
+      });
+      let ok = res.ok;
+      try { const j = await res.json(); ok = ok && j && j.ok; } catch (e) { /* CORS/opaque – best effort */ }
+      if (ok) { await markUploaded(rec); setUploadStatus(rec.id, "done"); return true; }
+      throw new Error("upload-not-ok");
+    } catch (e) {
+      setUploadStatus(rec.id, "pending");
+      return false;
+    } finally {
+      rec._uploading = false;
+    }
+  }
+
+  // Retry-Schleife für noch nicht hochgeladene Fotos (Offline / fehlgeschlagen).
+  let flushing = false;
+  async function flushUploads() {
+    if (!uploadEnabled() || flushing || !navigator.onLine) return;
+    flushing = true;
+    try {
+      for (const rec of state.photos) {
+        if (!rec.uploaded) await uploadPhoto(rec);
+      }
+    } finally { flushing = false; }
+  }
 
   /* ============================================================
      VIEW ROUTER
@@ -223,9 +317,10 @@
         err.classList.add("is-visible");
         return;
       }
+      const gid = (existing && existing.guestId) || genId();
       state.guest = existing && existing.joinedAt
-        ? { ...existing, name, consentAt: existing.consentAt || Date.now() }
-        : { name, joinedAt: Date.now(), consentAt: Date.now() };
+        ? { ...existing, name, guestId: gid, consentAt: existing.consentAt || Date.now() }
+        : { name, joinedAt: Date.now(), guestId: gid, consentAt: Date.now() };
       saveGuest(state.guest);
       input.blur();
       haptic(12);
@@ -515,12 +610,23 @@
       const cv = captureCanvas();
       const blob = await canvasToBlob(cv);
       const now = Date.now();
-      const rec = { id: "p" + now + "-" + Math.random().toString(36).slice(2, 7), blob, takenAt: now, readyAt: now + DEVELOP_MS };
+      const seq = state.photos.length + 1;
+      const gname = (state.guest && state.guest.name) || "Gast";
+      const gid = (state.guest && state.guest.guestId) || "anon";
+      const rec = {
+        id: "p" + now + "-" + Math.random().toString(36).slice(2, 7),
+        blob, takenAt: now, readyAt: now + DEVELOP_MS,
+        filename: "Lumave_" + pad2(seq) + "_" + stamp(now) + ".jpg",
+        uploaded: false, guest: gname, guestId: gid, seq,
+      };
       await persistPhoto(rec);
       rec.url = URL.createObjectURL(blob);
       state.photos.push(rec);
       updateCounter();
       updateGalleryButton();
+
+      // Best-effort Upload nach Google Drive (blockiert den Auslöser nicht).
+      uploadPhoto(rec);
 
       const left = MAX_SHOTS - state.photos.length;
       if (left === 0) toast("Letzte Aufnahme! Dein Film ist voll.", true);
@@ -604,6 +710,10 @@
           '<span class="dev-cell__time">--:--:--</span>' +
           '<span class="dev-cell__state">In Entwicklung</span>' +
         "</div>" +
+        (uploadEnabled()
+          ? '<span class="dev-cell__up" data-status="' + (p.uploaded ? "done" : "pending") +
+            '" title="Google-Drive-Upload">' + ICONS.cloud + "</span>"
+          : "") +
         '<span class="dev-cell__ready">' + ICONS.check + "</span>" +
         '<span class="dev-cell__meta">' + String(i + 1).padStart(2, "0") + "</span>" +
         '<div class="dev-cell__bar"><i></i></div>';
@@ -720,12 +830,18 @@
     updateCounter();
     updateGalleryButton();
 
-    // Returning guest with an unfinished film? Drop them straight to the camera.
+    // Returning guest? Pre-fill on the join screen; ensure a stable guestId exists.
     const g = loadGuest();
     if (g && g.name) {
+      if (!g.guestId) { g.guestId = genId(); saveGuest(g); }
       state.guest = g;
-      // Keep them on the join screen (pre-filled) so they confirm — feels
-      // intentional. Change to `show("camera")` to skip. We stay on join.
+    }
+
+    // Noch nicht hochgeladene Fotos (Offline/Fehler) im Hintergrund nachreichen.
+    if (uploadEnabled()) {
+      flushUploads();
+      on(window, "online", flushUploads);
+      setInterval(flushUploads, 30000);
     }
   }
 
