@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <style>html,body{background:#040404;}</style>
   <link rel="preload" href="../assets/fonts/HostGrotesk.ttf" as="font" type="font/ttf" crossorigin />
-  <link rel="stylesheet" href="app.css?v=10" />
+  <link rel="stylesheet" href="app.css?v=11" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -87,7 +87,6 @@
         <div class="vf-center" aria-hidden="true"></div>
 
         <div class="shutter-blink" id="shutterBlink" aria-hidden="true"></div>
-        <div class="flash-overlay" id="flashOverlay" aria-hidden="true"></div>
 
         <div class="vf-status" id="camStatus" role="status" aria-live="polite">
           <div class="spinner" id="camSpinner"></div>
@@ -165,6 +164,10 @@
       </div>
     </section>
 
+    <!-- Frontblitz / Blitz-Effekt: liegt auf App-Ebene, damit beim Auslösen der
+         KOMPLETTE Bildschirm leuchtet (nicht nur der Sucher). -->
+    <div class="flash-overlay" id="flashOverlay" aria-hidden="true"></div>
+
     <!-- Lightbox for revealed photos -->
     <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Foto ansehen">
       <button class="lightbox__close" id="lightboxClose" type="button" aria-label="Schließen">
@@ -176,6 +179,6 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </main>
 
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

@@ -369,16 +369,35 @@
   }
 
   /* ============================================================
+     WAKE LOCK — Display während der Kamera-Nutzung wachhalten.
+     Verhindert, dass der Frontblitz auf einem heruntergedimmten oder
+     kurz vor dem Sperren stehenden Bildschirm feuert.
+     ============================================================ */
+  let wakeLock = null;
+  async function acquireWakeLock() {
+    if (!("wakeLock" in navigator) || wakeLock) return;
+    try {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    } catch (e) { wakeLock = null; } // z. B. Energiesparmodus — kein Problem
+  }
+  function releaseWakeLock() {
+    if (!wakeLock) return;
+    try { wakeLock.release(); } catch (e) {}
+    wakeLock = null;
+  }
+
+  /* ============================================================
      VIEW ROUTER
      ============================================================ */
   function show(name) {
     Object.entries(views).forEach(([k, el]) =>
       el.classList.toggle("is-active", k === name)
     );
-    if (name === "camera") ensureCamera();
+    if (name === "camera") { ensureCamera(); acquireWakeLock(); }
     if (name === "gallery") renderGallery();
     // Pause camera stream when leaving the finder to save battery
-    if (name !== "camera") setTorch(false);
+    if (name !== "camera") { setTorch(false); releaseWakeLock(); }
   }
 
   /* ============================================================
@@ -749,7 +768,10 @@
         } else {
           screenFlash = true; // kein Torch (z. B. Selfie) → Display-Blitz
           fo.classList.add("is-hold");
-          await sleep(320);
+          // Länger halten: Die Kamera-Automatik braucht Zeit, auf das helle
+          // Display nachzubelichten — erst dann wirkt der Frontblitz im Foto.
+          // (System-Helligkeit ist per Web-API nicht steuerbar.)
+          await sleep(700);
         }
       } else if (state.flashMode === "auto") {
         // Auto: kurzer ästhetischer Flash-Effekt (Umgebungslicht ist im
@@ -983,10 +1005,14 @@
       }
     });
 
-    // Reclaim camera when tab becomes visible again
+    // Reclaim camera (and wake lock — it auto-releases when the tab hides)
     on(document, "visibilitychange", () => {
       if (document.hidden) { stopStream(); }
-      else if (views.camera.classList.contains("is-active")) { state.stream = null; ensureCamera(); }
+      else if (views.camera.classList.contains("is-active")) {
+        state.stream = null;
+        ensureCamera();
+        acquireWakeLock();
+      }
     });
   }
 
