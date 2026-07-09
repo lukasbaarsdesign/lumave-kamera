@@ -33,8 +33,9 @@
   const LUT_URL = "lumave-look.cube?v=1";
   const EDITED_SUBFOLDER = "Edited";
   let LUT = null; // { n, data: Float32Array } — null = Preset nicht verfügbar
-  const CAPTURE_W = 1080;
-  const CAPTURE_H = 1350; // 4:5 film frame
+  const CAPTURE_W = 1638;
+  const CAPTURE_H = 2048; // 4:5-Filmformat, lange Kante 2048 px
+  const JPEG_QUALITY = 0.85;
   const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   /* ---------- Tiny DOM helpers ---------- */
@@ -500,8 +501,11 @@
       audio: false,
       video: {
         facingMode: { ideal: facing },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
+        // Maximal verfügbare Sensorauflösung anfordern (ideal = best effort,
+        // der Browser wählt das Maximum der Kamera). Nötig, damit die
+        // 2048er-Ausgabe echte Details trägt statt hochskaliertem 1080p.
+        width: { ideal: 4096 },
+        height: { ideal: 4096 },
       },
     };
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -659,9 +663,10 @@
     vg.addColorStop(1, "rgba(8,5,3,0.6)");
     ctx.fillStyle = vg;
     ctx.fillRect(0, 0, w, h);
-    // grain
+    // grain (Dichte skaliert mit der Fläche, damit der Look bei jeder Größe stimmt)
     ctx.globalAlpha = 0.05;
-    for (let i = 0; i < 900; i++) {
+    const specks = Math.round((w * h) / 1620);
+    for (let i = 0; i < specks; i++) {
       ctx.fillStyle = Math.random() > 0.5 ? "#fff" : "#000";
       ctx.fillRect(Math.random() * w, Math.random() * h, 1.4, 1.4);
     }
@@ -702,9 +707,9 @@
 
   function canvasToBlob(cv) {
     return new Promise((res) => {
-      if (cv.toBlob) cv.toBlob((b) => res(b), "image/jpeg", 0.72);
+      if (cv.toBlob) cv.toBlob((b) => res(b), "image/jpeg", JPEG_QUALITY);
       else {
-        const data = cv.toDataURL("image/jpeg", 0.72);
+        const data = cv.toDataURL("image/jpeg", JPEG_QUALITY);
         const bin = atob(data.split(",")[1]);
         const arr = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
