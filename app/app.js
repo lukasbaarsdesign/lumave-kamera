@@ -59,7 +59,7 @@
     stream: null,
     track: null,
     facing: "environment",
-    flashMode: "auto",    // off | auto | on
+    flashMode: "on",      // "on" (Default — beste Ergebnisse) | "off"
     torchOn: false,
     busy: false,
     photos: [],           // [{ id, blob, takenAt, readyAt, url }]
@@ -154,8 +154,6 @@
      ICONS (inline SVG — no emoji)
      ============================================================ */
   const ICONS = {
-    flashAuto:
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2 4 13h5l-1 7 6-9h-4z"/><text x="17.5" y="9" font-size="8" font-family="Host Grotesk, sans-serif" font-weight="700" fill="currentColor" stroke="none">A</text></svg>',
     flashOn:
       '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>',
     flashOff:
@@ -611,11 +609,10 @@
     const label = $("flashLabel");
     const btn = $("flashBtn");
     const map = {
-      auto: { icon: "flashAuto", text: "Auto", pressed: "false" },
-      on:   { icon: "flashOn",   text: "An",   pressed: "true"  },
-      off:  { icon: "flashOff",  text: "Aus",  pressed: "false" },
+      on:  { icon: "flashOn",  text: "An",  pressed: "true"  },
+      off: { icon: "flashOff", text: "Aus", pressed: "false" },
     };
-    const m = map[state.flashMode];
+    const m = map[state.flashMode] || map.on;
     ico.innerHTML = ICONS[m.icon];
     label.textContent = m.text;
     btn.setAttribute("aria-label", "Blitz: " + m.text);
@@ -623,11 +620,19 @@
     btn.classList.toggle("is-active", state.flashMode === "on");
   }
 
-  function cycleFlash() {
-    const order = ["auto", "on", "off"];
-    state.flashMode = order[(order.indexOf(state.flashMode) + 1) % order.length];
-    renderFlash();
+  /* Blitz ist bewusst standardmäßig AN (beste Ergebnisse). Ausschalten geht,
+     aber erst nach einem kleinen Hinweis-Dialog — Ziel: Blitz möglichst an lassen. */
+  function openFlashWarn() { $("flashWarn").classList.add("is-open"); }
+  function closeFlashWarn() { $("flashWarn").classList.remove("is-open"); }
+
+  function toggleFlash() {
     haptic(8);
+    if (state.flashMode === "on") {
+      openFlashWarn(); // Ausschalten erst nach Bestätigung im Dialog
+      return;
+    }
+    state.flashMode = "on";
+    renderFlash();
   }
 
   async function setTorch(onFlag) {
@@ -773,10 +778,6 @@
           // (System-Helligkeit ist per Web-API nicht steuerbar.)
           await sleep(700);
         }
-      } else if (state.flashMode === "auto") {
-        // Auto: kurzer ästhetischer Flash-Effekt (Umgebungslicht ist im
-        // Browser nicht zuverlässig messbar), keine Auslöse-Verzögerung.
-        fo.classList.remove("is-firing"); void fo.offsetWidth; fo.classList.add("is-firing");
       }
 
       // Mechanischer Shutter-Blink im Moment der Aufnahme.
@@ -976,7 +977,18 @@
      WIRE UP
      ============================================================ */
   function bind() {
-    on($("flashBtn"), "click", cycleFlash);
+    on($("flashBtn"), "click", toggleFlash);
+    on($("flashKeepBtn"), "click", () => { closeFlashWarn(); haptic(8); });
+    on($("flashOffBtn"), "click", () => {
+      state.flashMode = "off";
+      renderFlash();
+      closeFlashWarn();
+      toast("Blitz ausgeschaltet");
+    });
+    // Backdrop-Tipp = sichere Wahl: Blitz bleibt an
+    on($("flashWarn"), "click", (e) => {
+      if (e.target.classList.contains("flash-warn__backdrop")) closeFlashWarn();
+    });
     on($("shutterBtn"), "click", capture);
     on($("flipBtn"), "click", async () => {
       if (fallbackReason) { toast("Im Vorschaumodus nicht verfügbar."); return; }
@@ -995,7 +1007,9 @@
 
     on($("lightboxClose"), "click", closeLightbox);
     on($("lightbox"), "click", (e) => { if (e.target === $("lightbox")) closeLightbox(); });
-    on(document, "keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
+    on(document, "keydown", (e) => {
+      if (e.key === "Escape") { closeLightbox(); closeFlashWarn(); }
+    });
 
     // Space / Enter triggers shutter when camera is active (desktop testing)
     on(document, "keydown", (e) => {

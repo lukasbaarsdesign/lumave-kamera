@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <style>html,body{background:#040404;}</style>
   <link rel="preload" href="../assets/fonts/HostGrotesk.ttf" as="font" type="font/ttf" crossorigin />
-  <link rel="stylesheet" href="app.css?v=11" />
+  <link rel="stylesheet" href="app.css?v=12" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -108,12 +108,12 @@
         </div>
 
         <div class="controls">
-          <!-- Flash -->
-          <button class="ctrl" id="flashBtn" type="button" aria-label="Blitz: Automatik" aria-pressed="false">
+          <!-- Flash (Default: AN — beste Ergebnisse) -->
+          <button class="ctrl is-active" id="flashBtn" type="button" aria-label="Blitz: An" aria-pressed="true">
             <span class="ctrl__ico" id="flashIco">
               <!-- icon injected by JS -->
             </span>
-            <span class="ctrl__label" id="flashLabel">Auto</span>
+            <span class="ctrl__label" id="flashLabel">An</span>
           </button>
 
           <!-- Shutter -->
@@ -168,6 +168,24 @@
          KOMPLETTE Bildschirm leuchtet (nicht nur der Sucher). -->
     <div class="flash-overlay" id="flashOverlay" aria-hidden="true"></div>
 
+    <!-- Hinweis-Dialog beim Ausschalten des Blitzes -->
+    <div class="flash-warn" id="flashWarn" role="dialog" aria-modal="true" aria-labelledby="flashWarnTitle">
+      <div class="flash-warn__backdrop"></div>
+      <div class="flash-warn__panel">
+        <span class="flash-warn__ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
+        </span>
+        <h2 id="flashWarnTitle">Blitz ausschalten?</h2>
+        <p>Mit aktiviertem Blitz werden deine Fotos am schönsten – gerade bei Kerzenlicht und auf der Tanzfläche.</p>
+        <button class="btn btn--primary btn--block" id="flashKeepBtn" type="button">
+          <span class="btn__label">Blitz anlassen</span>
+        </button>
+        <button class="btn btn--ghost btn--block" id="flashOffBtn" type="button">
+          <span class="btn__label">Ohne Blitz fotografieren</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Lightbox for revealed photos -->
     <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Foto ansehen">
       <button class="lightbox__close" id="lightboxClose" type="button" aria-label="Schließen">
@@ -179,6 +197,6 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </main>
 
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>
