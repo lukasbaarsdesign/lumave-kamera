@@ -30,7 +30,7 @@
      (Apps Script kann keine Pixel bearbeiten). Pro Foto gehen zwei Dateien
      nach Drive: Original in den Gast-Ordner, die entwickelte Version in den
      Unterordner "Edited". */
-  const LUT_URL = "lumave-look.cube?v=1";
+  const LUT_URL = "lumave-look.cube?v=2";
   const EDITED_SUBFOLDER = "Edited";
   let LUT = null; // { n, data: Float32Array } — null = Preset nicht verfügbar
   const CAPTURE_W = 1638;
