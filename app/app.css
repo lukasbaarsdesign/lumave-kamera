@@ -463,6 +463,11 @@ input { font: inherit; }
   8% { opacity: 0.95; }
   100% { opacity: 0; }
 }
+/* Frontblitz: Display hell HALTEN, bis die Aufnahme im Kasten ist … */
+.flash-overlay.is-hold { opacity: 0.98; }
+/* … und danach weich ausblenden. */
+.flash-overlay.is-fade { animation: flashFade 0.35s var(--ease-out); }
+@keyframes flashFade { from { opacity: 0.98; } to { opacity: 0; } }
 /* Mechanical shutter blink */
 .shutter-blink {
   position: absolute;
@@ -789,7 +794,8 @@ input { font: inherit; }
 /* Revealed state */
 .dev-cell.is-ready { cursor: pointer; }
 .dev-cell.is-ready img {
-  filter: sepia(0.22) saturate(0.95) contrast(1.05) brightness(1);
+  /* Kein CSS-Grading mehr: das Bild ist bereits die LUT-entwickelte Version. */
+  filter: none;
   transform: scale(1);
 }
 .dev-cell.is-ready .dev-cell__overlay { opacity: 0; pointer-events: none; transition: opacity 0.6s; }
@@ -861,7 +867,7 @@ input { font: inherit; }
   max-width: 100%;
   max-height: 100%;
   border-radius: 12px;
-  filter: sepia(0.22) saturate(0.95) contrast(1.05);
+  /* Kein CSS-Grading: die Lightbox zeigt die LUT-entwickelte Version. */
   box-shadow: 0 20px 60px rgba(0,0,0,0.6);
 }
 .lightbox__close {

@@ -40,6 +40,7 @@
   /* ---------- Tiny DOM helpers ---------- */
   const $ = (id) => document.getElementById(id);
   const on = (el, ev, fn, opts) => el && el.addEventListener(ev, fn, opts);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /* ---------- Elements ---------- */
   const app = $("app");
@@ -127,17 +128,24 @@
     try { await idbPut(recToStore(rec)); }
     catch (e) { if (memStore.indexOf(rec) === -1) memStore.push(rec); }
   }
+  function withUrls(r) {
+    return {
+      ...r,
+      url: r.url || URL.createObjectURL(r.blob),
+      editedUrl: r.editedUrl || (r.editedBlob ? URL.createObjectURL(r.editedBlob) : null),
+    };
+  }
+  // Galerie/Lightbox zeigen die entwickelte (LUT-)Version — identisch mit der
+  // Datei im Drive-Ordner "Edited", nur direkt aus dem lokalen Speicher.
+  function displayUrl(rec) { return rec.editedUrl || rec.url; }
+
   async function loadPhotos() {
     try {
       const rows = await idbAll();
       const src = rows.length || !memStore.length ? rows : memStore;
-      return src
-        .map((r) => ({ ...r, url: URL.createObjectURL(r.blob) }))
-        .sort((a, b) => a.takenAt - b.takenAt);
+      return src.map(withUrls).sort((a, b) => a.takenAt - b.takenAt);
     } catch (e) {
-      return memStore
-        .map((r) => ({ ...r, url: r.url || URL.createObjectURL(r.blob) }))
-        .sort((a, b) => a.takenAt - b.takenAt);
+      return memStore.map(withUrls).sort((a, b) => a.takenAt - b.takenAt);
     }
   }
 
@@ -254,6 +262,7 @@
     if (rec.editedBlob || !LUT || !rec.blob) return;
     try {
       rec.editedBlob = await makeEditedBlob(await blobToCanvas(rec.blob));
+      rec.editedUrl = URL.createObjectURL(rec.editedBlob);
       await persistPhoto(rec);
     } catch (e) { /* nächster Flush versucht es erneut */ }
   }
@@ -719,22 +728,44 @@
     const shutter = $("shutterBtn");
     shutter.disabled = true;
 
-    // Flash: fire torch + white flash when on (or auto in the fallback we skip torch)
-    const fireFlash = state.flashMode === "on" || state.flashMode === "auto";
+    /* Blitz-Sequenz: Der Torch braucht nach applyConstraints ~300–500 ms, bis er
+       physisch leuchtet und die Kamera nachbelichtet hat. Deshalb: Blitz an →
+       Aufwärmzeit → DANN auslösen → Blitz aus. Ohne Torch (Frontkamera) dient
+       das hell gehaltene Display als Frontblitz, ebenfalls VOR der Aufnahme. */
     let torchUsed = false;
-    if (state.flashMode === "on") torchUsed = await setTorch(true);
-
-    // Mechanical shutter blink always; white flash only when flash fires.
-    const blink = $("shutterBlink");
-    blink.classList.remove("is-firing"); void blink.offsetWidth; blink.classList.add("is-firing");
-    if (fireFlash) {
-      const fo = $("flashOverlay");
-      fo.classList.remove("is-firing"); void fo.offsetWidth; fo.classList.add("is-firing");
-    }
-    haptic(18);
+    let screenFlash = false;
+    const fo = $("flashOverlay");
 
     try {
+      if (state.flashMode === "on") {
+        torchUsed = await setTorch(true);
+        if (torchUsed) {
+          await sleep(500); // LED aufleuchten + Belichtung anpassen lassen
+        } else {
+          screenFlash = true; // kein Torch (z. B. Selfie) → Display-Blitz
+          fo.classList.add("is-hold");
+          await sleep(320);
+        }
+      } else if (state.flashMode === "auto") {
+        // Auto: kurzer ästhetischer Flash-Effekt (Umgebungslicht ist im
+        // Browser nicht zuverlässig messbar), keine Auslöse-Verzögerung.
+        fo.classList.remove("is-firing"); void fo.offsetWidth; fo.classList.add("is-firing");
+      }
+
+      // Mechanischer Shutter-Blink im Moment der Aufnahme.
+      const blink = $("shutterBlink");
+      blink.classList.remove("is-firing"); void blink.offsetWidth; blink.classList.add("is-firing");
+      haptic(18);
+
       const cv = captureCanvas();
+
+      // Blitz direkt nach dem eingefangenen Frame beenden.
+      if (torchUsed) { setTorch(false); torchUsed = false; }
+      if (screenFlash) {
+        fo.classList.remove("is-hold");
+        fo.classList.remove("is-fade"); void fo.offsetWidth; fo.classList.add("is-fade");
+        screenFlash = false;
+      }
       const blob = await canvasToBlob(cv);
       const now = Date.now();
       const seq = state.photos.length + 1;
@@ -759,7 +790,9 @@
         if (LUT) {
           try {
             rec.editedBlob = await makeEditedBlob(cv);
+            rec.editedUrl = URL.createObjectURL(rec.editedBlob);
             await persistPhoto(rec);
+            updateGalleryButton(); // Thumbnail auf die entwickelte Version heben
           } catch (e) { /* ensureEdited holt das im Flush nach */ }
         }
         uploadPhoto(rec);
@@ -772,6 +805,7 @@
       toast("Aufnahme fehlgeschlagen – versuch es nochmal.");
     } finally {
       if (torchUsed) await setTorch(false);
+      fo.classList.remove("is-hold");
       shutter.disabled = false;
       state.busy = false;
     }
@@ -794,7 +828,7 @@
     badge.classList.toggle("is-hidden", count === 0);
     if (count > 0) {
       const last = state.photos[state.photos.length - 1];
-      img.src = last.url;
+      img.src = displayUrl(last);
       img.hidden = false;
       thumb.classList.remove("is-empty");
     } else {
@@ -841,7 +875,7 @@
       cell.dataset.ready = String(p.readyAt);
       cell.style.animationDelay = Math.min(i * 0.05, 0.4) + "s";
       cell.innerHTML =
-        '<img src="' + p.url + '" alt="Aufnahme ' + (i + 1) + ' – wird entwickelt" />' +
+        '<img src="' + displayUrl(p) + '" alt="Aufnahme ' + (i + 1) + ' – wird entwickelt" />' +
         '<div class="dev-cell__overlay">' +
           '<span class="dev-cell__ico">' + ICONS.hourglass + "</span>" +
           '<span class="dev-cell__time">--:--:--</span>' +
@@ -855,7 +889,7 @@
         '<span class="dev-cell__meta">' + String(i + 1).padStart(2, "0") + "</span>" +
         '<div class="dev-cell__bar"><i></i></div>';
       on(cell, "click", () => {
-        if (cell.classList.contains("is-ready")) openLightbox(p.url);
+        if (cell.classList.contains("is-ready")) openLightbox(displayUrl(p));
       });
       grid.appendChild(cell);
     });
