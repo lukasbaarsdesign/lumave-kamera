@@ -24,6 +24,15 @@
   const UPLOAD_ENDPOINT = "https://script.google.com/macros/s/AKfycbwQ7P7hgEfF5om07Fgjh-aKPVfFaunB_bazbJssZJ8t2mZbBmwe71uKv1z12v4In0Y/exec";
   const UPLOAD_SECRET = "lumave-2026"; // muss mit SECRET im Apps Script übereinstimmen
   const uploadEnabled = () => /^https:\/\//.test(UPLOAD_ENDPOINT);
+
+  /* ---------- Filterpreset (.cube-LUT) ----------
+     Das Lumave-Look-Preset wird clientseitig auf jede Aufnahme angewendet
+     (Apps Script kann keine Pixel bearbeiten). Pro Foto gehen zwei Dateien
+     nach Drive: Original in den Gast-Ordner, die entwickelte Version in den
+     Unterordner "Edited". */
+  const LUT_URL = "lumave-look.cube?v=1";
+  const EDITED_SUBFOLDER = "Edited";
+  let LUT = null; // { n, data: Float32Array } — null = Preset nicht verfügbar
   const CAPTURE_W = 1080;
   const CAPTURE_H = 1350; // 4:5 film frame
   const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -111,15 +120,12 @@
       id: rec.id, blob: rec.blob, takenAt: rec.takenAt, readyAt: rec.readyAt,
       uploaded: !!rec.uploaded, filename: rec.filename || null,
       guest: rec.guest || null, guestId: rec.guestId || null, seq: rec.seq || null,
+      editedBlob: rec.editedBlob || null, uploadedEdited: !!rec.uploadedEdited,
     };
   }
   async function persistPhoto(rec) {
     try { await idbPut(recToStore(rec)); }
-    catch (e) { memStore.push(rec); }
-  }
-  async function markUploaded(rec) {
-    rec.uploaded = true;
-    try { await idbPut(recToStore(rec)); } catch (e) {}
+    catch (e) { if (memStore.indexOf(rec) === -1) memStore.push(rec); }
   }
   async function loadPhotos() {
     try {
@@ -158,6 +164,101 @@
   };
 
   /* ============================================================
+     LUT — Lumave-Look (.cube) clientseitig anwenden
+     ============================================================ */
+  async function loadLUT() {
+    try {
+      const res = await fetch(LUT_URL);
+      if (!res.ok) throw new Error("lut-fetch " + res.status);
+      LUT = parseCube(await res.text());
+    } catch (e) {
+      LUT = null; // Preset fehlt → App läuft weiter, nur ohne Edited-Uploads
+    }
+  }
+
+  function parseCube(text) {
+    const lines = text.split(/\r?\n/);
+    let n = 0, data = null, idx = 0;
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li].trim();
+      if (!line || line[0] === "#") continue;
+      if (/^(TITLE|DOMAIN_MIN|DOMAIN_MAX)/i.test(line)) continue; // Standard-Domain 0..1
+      const m = line.match(/^LUT_3D_SIZE\s+(\d+)/i);
+      if (m) { n = +m[1]; data = new Float32Array(n * n * n * 3); continue; }
+      if (/^LUT_1D_SIZE/i.test(line)) throw new Error("1D-LUT nicht unterstützt");
+      if (!data) continue;
+      const p = line.split(/\s+/);
+      if (p.length < 3) continue;
+      data[idx++] = +p[0]; data[idx++] = +p[1]; data[idx++] = +p[2];
+    }
+    if (!n || !data || idx < n * n * n * 3) throw new Error("lut-parse");
+    return { n, data };
+  }
+
+  // Trilineare Interpolation, in-place auf ImageData. (Rot läuft im .cube am schnellsten.)
+  function applyLutToImageData(im, lut) {
+    const d = im.data, n = lut.n, t = lut.data, n2 = n * n, mx = n - 1, s = mx / 255;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i] * s, g = d[i + 1] * s, b = d[i + 2] * s;
+      const r0 = r | 0, g0 = g | 0, b0 = b | 0;
+      const fr = r - r0, fg = g - g0, fb = b - b0;
+      const r1 = r0 < mx ? r0 + 1 : mx, g1 = g0 < mx ? g0 + 1 : mx, b1 = b0 < mx ? b0 + 1 : mx;
+      const g0n = g0 * n, g1n = g1 * n, b0n = b0 * n2, b1n = b1 * n2;
+      const i000 = (r0 + g0n + b0n) * 3, i100 = (r1 + g0n + b0n) * 3;
+      const i010 = (r0 + g1n + b0n) * 3, i110 = (r1 + g1n + b0n) * 3;
+      const i001 = (r0 + g0n + b1n) * 3, i101 = (r1 + g0n + b1n) * 3;
+      const i011 = (r0 + g1n + b1n) * 3, i111 = (r1 + g1n + b1n) * 3;
+      for (let c = 0; c < 3; c++) {
+        const c00 = t[i000 + c] + (t[i100 + c] - t[i000 + c]) * fr;
+        const c10 = t[i010 + c] + (t[i110 + c] - t[i010 + c]) * fr;
+        const c01 = t[i001 + c] + (t[i101 + c] - t[i001 + c]) * fr;
+        const c11 = t[i011 + c] + (t[i111 + c] - t[i011 + c]) * fr;
+        const c0 = c00 + (c10 - c00) * fg;
+        const c1 = c01 + (c11 - c01) * fg;
+        let v = (c0 + (c1 - c0) * fb) * 255;
+        d[i + c] = v < 0 ? 0 : v > 255 ? 255 : v;
+      }
+    }
+  }
+
+  function makeEditedBlob(srcCanvas) {
+    if (!LUT) return Promise.resolve(null);
+    const cv = document.createElement("canvas");
+    cv.width = srcCanvas.width; cv.height = srcCanvas.height;
+    const ctx = cv.getContext("2d");
+    ctx.drawImage(srcCanvas, 0, 0);
+    const im = ctx.getImageData(0, 0, cv.width, cv.height);
+    applyLutToImageData(im, LUT);
+    ctx.putImageData(im, 0, 0);
+    return canvasToBlob(cv);
+  }
+
+  function blobToCanvas(blob) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+      img.onload = () => {
+        const cv = document.createElement("canvas");
+        cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+        cv.getContext("2d").drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        res(cv);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("img-load")); };
+      img.src = url;
+    });
+  }
+
+  // Edited-Version nachträglich erzeugen (ältere Fotos ohne editedBlob, Retries).
+  async function ensureEdited(rec) {
+    if (rec.editedBlob || !LUT || !rec.blob) return;
+    try {
+      rec.editedBlob = await makeEditedBlob(await blobToCanvas(rec.blob));
+      await persistPhoto(rec);
+    } catch (e) { /* nächster Flush versucht es erneut */ }
+  }
+
+  /* ============================================================
      UPLOAD zu Google Drive (pro Gast ein Ordner)
      ============================================================ */
   const pad2 = (n) => String(n).padStart(2, "0");
@@ -182,32 +283,61 @@
     if (cell) cell.dataset.status = status; // "pending" | "up" | "done"
   }
 
+  // Vollständig synchronisiert = Original + (falls Preset aktiv) Edited hochgeladen.
+  function syncDone(rec) {
+    return !!rec.uploaded && (!LUT || !!rec.uploadedEdited);
+  }
+
+  // Eine Datei hochladen: kind = "original" | "edited".
+  async function uploadOne(rec, kind) {
+    const isEdited = kind === "edited";
+    const blob = isEdited ? rec.editedBlob : rec.blob;
+    if (!blob) return false;
+    const base64 = await blobToBase64(blob);
+    const payload = {
+      secret: UPLOAD_SECRET,
+      guest: rec.guest || (state.guest && state.guest.name) || "Gast",
+      guestId: rec.guestId || (state.guest && state.guest.guestId) || "anon",
+      filename: rec.filename,
+      mimeType: "image/jpeg",
+      takenAt: rec.takenAt,
+      dataBase64: base64,
+    };
+    if (isEdited) payload.subfolder = EDITED_SUBFOLDER;
+    // text/plain => "simple request", vermeidet CORS-Preflight bei Apps Script.
+    const res = await fetch(UPLOAD_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+    let j = null;
+    try { j = await res.json(); } catch (e) { /* opaque */ }
+    // Edited zählt nur, wenn das Script den Unterordner bestätigt (j.sub).
+    // Ein altes Script ohne subfolder-Support meldet kein sub → Retry, bis
+    // die neue Script-Version deployt ist (selbstheilend, idempotent).
+    return !!(res.ok && j && j.ok && (!isEdited || j.sub === EDITED_SUBFOLDER));
+  }
+
   async function uploadPhoto(rec) {
-    if (!uploadEnabled() || rec.uploaded || rec._uploading) return false;
+    if (!uploadEnabled() || rec._uploading || syncDone(rec)) return syncDone(rec);
     rec._uploading = true;
     setUploadStatus(rec.id, "up");
     try {
       if (!rec.filename) rec.filename = "Lumave_" + stamp(rec.takenAt || Date.now()) + "_" + rec.id + ".jpg";
-      const base64 = await blobToBase64(rec.blob);
-      const payload = {
-        secret: UPLOAD_SECRET,
-        guest: rec.guest || (state.guest && state.guest.name) || "Gast",
-        guestId: rec.guestId || (state.guest && state.guest.guestId) || "anon",
-        filename: rec.filename,
-        mimeType: "image/jpeg",
-        takenAt: rec.takenAt,
-        dataBase64: base64,
-      };
-      // text/plain => "simple request", vermeidet CORS-Preflight bei Apps Script.
-      const res = await fetch(UPLOAD_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(payload),
-      });
-      let ok = res.ok;
-      try { const j = await res.json(); ok = ok && j && j.ok; } catch (e) { /* CORS/opaque – best effort */ }
-      if (ok) { await markUploaded(rec); setUploadStatus(rec.id, "done"); return true; }
-      throw new Error("upload-not-ok");
+      if (!rec.uploaded) {
+        if (!(await uploadOne(rec, "original"))) throw new Error("orig-failed");
+        rec.uploaded = true;
+        await persistPhoto(rec);
+      }
+      if (LUT && !rec.uploadedEdited) {
+        await ensureEdited(rec);
+        if (!rec.editedBlob) throw new Error("edited-missing");
+        if (!(await uploadOne(rec, "edited"))) throw new Error("edited-failed");
+        rec.uploadedEdited = true;
+        await persistPhoto(rec);
+      }
+      setUploadStatus(rec.id, "done");
+      return true;
     } catch (e) {
       setUploadStatus(rec.id, "pending");
       return false;
@@ -216,14 +346,14 @@
     }
   }
 
-  // Retry-Schleife für noch nicht hochgeladene Fotos (Offline / fehlgeschlagen).
+  // Retry-Schleife für unvollständige Uploads (Offline / Fehler / altes Script).
   let flushing = false;
   async function flushUploads() {
     if (!uploadEnabled() || flushing || !navigator.onLine) return;
     flushing = true;
     try {
       for (const rec of state.photos) {
-        if (!rec.uploaded) await uploadPhoto(rec);
+        if (!syncDone(rec)) await uploadPhoto(rec);
       }
     } finally { flushing = false; }
   }
@@ -550,11 +680,8 @@
       }
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, CAPTURE_W, CAPTURE_H);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      // gentle warm grade so captures share the Lumave signature
-      ctx.globalCompositeOperation = "overlay";
-      ctx.fillStyle = "rgba(210,150,80,0.10)";
-      ctx.fillRect(0, 0, CAPTURE_W, CAPTURE_H);
-      ctx.globalCompositeOperation = "source-over";
+      // Original bleibt ungefiltert — der Lumave-Look entsteht über die
+      // .cube-LUT in der Edited-Version (kein Doppel-Grading).
     } else {
       // fallback filmic frame — new palette each shot for variety
       fallbackPal = PALETTES[Math.floor(Math.random() * PALETTES.length)];
@@ -618,6 +745,7 @@
         blob, takenAt: now, readyAt: now + DEVELOP_MS,
         filename: "Lumave_" + pad2(seq) + "_" + stamp(now) + ".jpg",
         uploaded: false, guest: gname, guestId: gid, seq,
+        editedBlob: null, uploadedEdited: false,
       };
       await persistPhoto(rec);
       rec.url = URL.createObjectURL(blob);
@@ -625,8 +753,17 @@
       updateCounter();
       updateGalleryButton();
 
-      // Best-effort Upload nach Google Drive (blockiert den Auslöser nicht).
-      uploadPhoto(rec);
+      // Nachgelagert (blockiert den Auslöser nicht): Lumave-Look anwenden,
+      // dann Original + Edited best-effort nach Drive laden.
+      (async () => {
+        if (LUT) {
+          try {
+            rec.editedBlob = await makeEditedBlob(cv);
+            await persistPhoto(rec);
+          } catch (e) { /* ensureEdited holt das im Flush nach */ }
+        }
+        uploadPhoto(rec);
+      })();
 
       const left = MAX_SHOTS - state.photos.length;
       if (left === 0) toast("Letzte Aufnahme! Dein Film ist voll.", true);
@@ -711,7 +848,7 @@
           '<span class="dev-cell__state">In Entwicklung</span>' +
         "</div>" +
         (uploadEnabled()
-          ? '<span class="dev-cell__up" data-status="' + (p.uploaded ? "done" : "pending") +
+          ? '<span class="dev-cell__up" data-status="' + (syncDone(p) ? "done" : "pending") +
             '" title="Google-Drive-Upload">' + ICONS.cloud + "</span>"
           : "") +
         '<span class="dev-cell__ready">' + ICONS.check + "</span>" +
@@ -842,7 +979,9 @@
     }
 
     // Noch nicht hochgeladene Fotos (Offline/Fehler) im Hintergrund nachreichen.
+    // Erst die LUT laden, damit auch ältere Fotos ihre Edited-Version bekommen.
     if (uploadEnabled()) {
+      await loadLUT();
       flushUploads();
       on(window, "online", flushUploads);
       setInterval(flushUploads, 30000);
