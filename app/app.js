@@ -15,19 +15,19 @@
   const TEST_DEVELOP_MS = 20 * 1000;
   const DEVELOP_MS = params.has("demo") ? TEST_DEVELOP_MS : REAL_DEVELOP_MS;
 
-  /* ---------- Foto-Upload zu Google Drive (Apps Script Web App) ----------
-     Jedes Foto wird zusätzlich zur lokalen Speicherung in einen Drive-Ordner
-     hochgeladen – pro Gast ein eigener Unterordner. Der Upload läuft über eine
-     Google-Apps-Script-Web-App (siehe google-apps-script/Code.gs), die unter dem
-     Konto des Ordner-Eigentümers schreibt (keine Zugangsdaten im Client).
-     >>> Nach dem Deploy hier die Web-App-URL (…/exec) eintragen. Leer = Upload aus. */
-  const UPLOAD_ENDPOINT = "https://script.google.com/macros/s/AKfycbwQ7P7hgEfF5om07Fgjh-aKPVfFaunB_bazbJssZJ8t2mZbBmwe71uKv1z12v4In0Y/exec";
-  const UPLOAD_SECRET = "lumave-2026"; // muss mit SECRET im Apps Script übereinstimmen
-  const uploadEnabled = () => /^https:\/\//.test(UPLOAD_ENDPOINT);
-
-  /* Hinweis: Die frühere clientseitige .cube-LUT-Filterung wurde entfernt —
-     die Fotos werden jetzt von einem Backend-Script direkt in Drive
-     gefiltert. Die App lädt nur noch das unbearbeitete Original hoch. */
+  /* ---------- Foto-Upload über den Entwicklungs-Server ----------
+     Die App schickt jedes unbearbeitete Original an den Lumave-Server
+     (Railway). Der legt es mit dem geheimen service_role-Key in Supabase ab
+     (Bucket "originals") und trägt es in die Tabelle "photos" ein
+     (status: "uploaded"); danach entwickelt er es (LUT + Filmkorn) und legt
+     es im Bucket "developed" ab. Es liegt KEIN Supabase-Key im Frontend.
+     >>> Hier die öffentliche Railway-Adresse eintragen. Leer = Upload aus. */
+  const DEVELOP_SERVER_URL = "https://lumave-filter-production.up.railway.app";
+  // Event-Code aus dem QR-Link (?event=julia-max) — muss zu events.code passen.
+  const EVENT_CODE = (params.get("event") || "test-hochzeit")
+    .replace(/[^a-z0-9-]/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")
+    .toLowerCase() || "test-hochzeit";
+  const uploadEnabled = () => /^https:\/\//.test(DEVELOP_SERVER_URL);
   const CAPTURE_W = 1638;
   const CAPTURE_H = 2048; // 4:5-Filmformat, lange Kante 2048 px
   const JPEG_QUALITY = 0.85;
@@ -158,7 +158,7 @@
   };
 
   /* ============================================================
-     UPLOAD zu Google Drive (pro Gast ein Ordner)
+     UPLOAD zum Entwicklungs-Server (der legt in Supabase ab)
      ============================================================ */
   const pad2 = (n) => String(n).padStart(2, "0");
   function stamp(ms) {
@@ -168,47 +168,72 @@
   }
   function genId() { return Math.random().toString(36).slice(2, 8); }
 
-  function blobToBase64(blob) {
-    return new Promise((res, rej) => {
-      const fr = new FileReader();
-      fr.onload = () => res(String(fr.result).split(",")[1] || "");
-      fr.onerror = () => rej(fr.error);
-      fr.readAsDataURL(blob);
-    });
-  }
-
   function setUploadStatus(id, status) {
     const cell = document.querySelector('.dev-cell[data-id="' + id + '"] .dev-cell__up');
     if (cell) cell.dataset.status = status; // "pending" | "up" | "done"
   }
 
-  // Pro Foto geht genau EINE Datei nach Drive: das unbearbeitete Original.
-  // (Die Filterung übernimmt ein Backend-Script direkt in Drive.)
+  // Meldet den Gast einmalig beim Server an und merkt sich die echten
+  // Supabase-IDs (eventId + guestId als UUID) im localStorage. Läuft im
+  // Hintergrund; blockiert das Fotografieren nie. Erneuter Aufruf ist billig
+  // (kehrt sofort zurück, sobald die IDs vorliegen und der Event-Code passt).
+  let _joining = false;
+  async function joinServer() {
+    if (!uploadEnabled() || _joining) return;
+    const g = state.guest;
+    if (!g || !g.name) return;
+    if (g.eventId && g.sbGuestId && g.eventCode === EVENT_CODE) return; // schon registriert
+    _joining = true;
+    try {
+      const r = await fetch(DEVELOP_SERVER_URL + "/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventCode: EVENT_CODE, name: g.name }),
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (!data || !data.eventId || !data.guestId) return;
+      g.eventId = data.eventId;
+      g.sbGuestId = data.guestId;
+      g.eventCode = EVENT_CODE;
+      state.guest = g;
+      saveGuest(g);
+      flushUploads(); // offene Fotos jetzt nachreichen
+    } catch (e) {
+      // still — Retry läuft über flushUploads (Intervall + "online")
+    } finally {
+      _joining = false;
+    }
+  }
+
+  // Pro Foto: das Original als rohes JPEG an den Server schicken; die Zuordnung
+  // (event/guest) trägt der Server anhand der mitgegebenen UUIDs ein. Retry-sicher:
+  // solange die Server-IDs fehlen, bleibt das Foto "pending" und wird später
+  // erneut versucht (der Server upsertet die Storage-Datei idempotent).
   async function uploadPhoto(rec) {
     if (!uploadEnabled() || rec.uploaded || rec._uploading) return !!rec.uploaded;
+    const g = state.guest || {};
+    if (!g.eventId || !g.sbGuestId) { // noch nicht am Server registriert
+      joinServer();                   // im Hintergrund nachholen
+      return false;
+    }
     rec._uploading = true;
     setUploadStatus(rec.id, "up");
     try {
       if (!rec.filename) rec.filename = "Lumave_" + stamp(rec.takenAt || Date.now()) + "_" + rec.id + ".jpg";
-      const base64 = await blobToBase64(rec.blob);
-      const payload = {
-        secret: UPLOAD_SECRET,
-        guest: rec.guest || (state.guest && state.guest.name) || "Gast",
-        guestId: rec.guestId || (state.guest && state.guest.guestId) || "anon",
+      const qs = new URLSearchParams({
+        eventId: g.eventId,
+        guestId: g.sbGuestId,
         filename: rec.filename,
-        mimeType: "image/jpeg",
-        takenAt: rec.takenAt,
-        dataBase64: base64,
-      };
-      // text/plain => "simple request", vermeidet CORS-Preflight bei Apps Script.
-      const res = await fetch(UPLOAD_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(payload),
+        takenAt: new Date(rec.takenAt || Date.now()).toISOString(),
       });
-      let j = null;
-      try { j = await res.json(); } catch (e) { /* opaque */ }
-      if (!(res.ok && j && j.ok)) throw new Error("upload-not-ok");
+      const up = await fetch(DEVELOP_SERVER_URL + "/upload?" + qs.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "image/jpeg" },
+        body: rec.blob,
+      });
+      if (!up.ok) throw new Error("upload " + up.status);
+
       rec.uploaded = true;
       await persistPhoto(rec);
       setUploadStatus(rec.id, "done");
@@ -346,6 +371,7 @@
         ? { ...existing, name, guestId: gid, consentAt: existing.consentAt || Date.now() }
         : { name, joinedAt: Date.now(), guestId: gid, consentAt: Date.now() };
       saveGuest(state.guest);
+      joinServer(); // beim Server registrieren (Hintergrund, blockiert nicht)
       input.blur();
       haptic(12);
       show("camera");
@@ -586,7 +612,7 @@
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, CAPTURE_W, CAPTURE_H);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       // Original bleibt ungefiltert — der Lumave-Look entsteht später
-      // durch das Backend-Script direkt in Drive.
+      // durch den Entwicklungs-Dienst (server.js) in Supabase.
     } else {
       // fallback filmic frame — new palette each shot for variety
       fallbackPal = PALETTES[Math.floor(Math.random() * PALETTES.length)];
@@ -678,7 +704,7 @@
       updateCounter();
       updateGalleryButton();
 
-      // Best-effort Upload nach Google Drive (blockiert den Auslöser nicht).
+      // Best-effort Upload nach Supabase (blockiert den Auslöser nicht).
       uploadPhoto(rec);
 
       const left = MAX_SHOTS - state.photos.length;
@@ -766,7 +792,7 @@
         "</div>" +
         (uploadEnabled()
           ? '<span class="dev-cell__up" data-status="' + (p.uploaded ? "done" : "pending") +
-            '" title="Google-Drive-Upload">' + ICONS.cloud + "</span>"
+            '" title="Foto-Upload">' + ICONS.cloud + "</span>"
           : "") +
         '<span class="dev-cell__ready">' + ICONS.check + "</span>" +
         '<span class="dev-cell__meta">' + String(i + 1).padStart(2, "0") + "</span>" +
@@ -897,13 +923,18 @@
     const durEl = $("developDurationText");
     if (durEl) durEl.textContent = formatDuration(DEVELOP_MS);
 
-    state.photos = await loadPhotos();
+    // Gespeicherte Fotos laden und mit dem Speicher MERGEN statt ersetzen:
+    // löst IndexedDB langsam auf und wurde währenddessen schon ausgelöst,
+    // würde eine harte Zuweisung das frische Foto aus dem State verlieren.
+    const stored = await loadPhotos();
+    const inMem = new Set(state.photos.map((p) => p.id));
+    state.photos = stored.filter((p) => !inMem.has(p.id)).concat(state.photos);
     updateCounter();
     updateGalleryButton();
 
     // Bereits beigetretener Gast? In derselben Session bleiben: direkt zur Kamera,
     // NICHT erneut "beitreten" lassen. Sonst würde bei jedem Reload für dieselbe
-    // Person ein neuer Drive-Ordner entstehen. Die guestId bleibt stabil im
+    // Person ein neuer Foto-Ordner entstehen. Die guestId bleibt stabil im
     // localStorage, damit alle Fotos im selben Gast-Ordner landen.
     const g = loadGuest();
     if (g && g.name) {
@@ -914,6 +945,7 @@
 
     // Noch nicht hochgeladene Fotos (Offline/Fehler) im Hintergrund nachreichen.
     if (uploadEnabled()) {
+      joinServer();  // schon beigetretener Gast? IDs sicherstellen (holt Uploads nach)
       flushUploads();
       on(window, "online", flushUploads);
       setInterval(flushUploads, 30000);
