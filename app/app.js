@@ -179,29 +179,43 @@
   // (kehrt sofort zurück, sobald die IDs vorliegen und der Event-Code passt).
   let _joining = false;
   async function joinServer() {
-    if (!uploadEnabled() || _joining) return;
+    if (!uploadEnabled() || _joining) return "skip";
     const g = state.guest;
-    if (!g || !g.name) return;
-    if (g.eventId && g.sbGuestId && g.eventCode === EVENT_CODE) return; // schon registriert
+    if (!g || !g.name) return "skip";
+    if (g.eventId && g.sbGuestId && g.eventCode === EVENT_CODE) return "ok"; // schon registriert
     _joining = true;
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 8000); // nicht ewig warten
     try {
       const r = await fetch(DEVELOP_SERVER_URL + "/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ eventCode: EVENT_CODE, name: g.name }),
+        signal: ctrl.signal,
       });
-      if (!r.ok) return;
+      if (!r.ok) {
+        // Hochzeit voll? Server antwortet mit 409 + { error: "guest_limit_reached" }
+        if (r.status === 409) {
+          let body = null;
+          try { body = await r.json(); } catch (e) {}
+          if (body && body.error === "guest_limit_reached") return "full";
+        }
+        return "error";
+      }
       const data = await r.json();
-      if (!data || !data.eventId || !data.guestId) return;
+      if (!data || !data.eventId || !data.guestId) return "error";
       g.eventId = data.eventId;
       g.sbGuestId = data.guestId;
       g.eventCode = EVENT_CODE;
       state.guest = g;
       saveGuest(g);
       flushUploads(); // offene Fotos jetzt nachreichen
+      return "ok";
     } catch (e) {
       // still — Retry läuft über flushUploads (Intervall + "online")
+      return "offline";
     } finally {
+      clearTimeout(to);
       _joining = false;
     }
   }
@@ -351,7 +365,7 @@
     });
     updateJoinButton();
 
-    on(form, "submit", (e) => {
+    on(form, "submit", async (e) => {
       e.preventDefault();
       const name = input.value.trim();
       if (name.length < 2) {
@@ -371,11 +385,29 @@
         ? { ...existing, name, guestId: gid, consentAt: existing.consentAt || Date.now() }
         : { name, joinedAt: Date.now(), guestId: gid, consentAt: Date.now() };
       saveGuest(state.guest);
-      joinServer(); // beim Server registrieren (Hintergrund, blockiert nicht)
+
+      // Beim Server anmelden. Nur wenn die Hochzeit voll ist, NICHT zur Kamera.
+      const lbl = btn.querySelector(".btn__label");
+      const lblText = lbl ? lbl.textContent : "";
+      btn.disabled = true;
+      if (lbl) lbl.textContent = "Einen Moment…";
+      const result = await joinServer();
+      if (lbl) lbl.textContent = lblText;
+      btn.disabled = false;
+
+      if (result === "full") {
+        $("fullDialog").classList.add("is-open");
+        return;
+      }
+
       input.blur();
       haptic(12);
       show("camera");
     });
+
+    // "voll"-Meldung wieder schließen
+    const fullOk = $("fullDialogOk");
+    if (fullOk) on(fullOk, "click", () => $("fullDialog").classList.remove("is-open"));
   }
 
   /* ============================================================
