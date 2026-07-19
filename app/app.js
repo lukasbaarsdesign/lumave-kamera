@@ -59,9 +59,11 @@
     flashMode: "on",      // "on" (Default — beste Ergebnisse) | "off"
     torchOn: false,
     busy: false,
-    photos: [],           // [{ id, blob, takenAt, readyAt, url }]
+    photos: [],           // [{ id, blob, takenAt, readyAt, url, filename, uploaded }]
     started: false,
+    developed: {},        // filename -> signierte URL des entwickelten (gefilterten) Bildes
   };
+  let lbUrl = null, lbName = null; // aktuell in der Lightbox gezeigtes Bild (für Download)
 
   /* ============================================================
      PERSISTENCE — localStorage (guest) + IndexedDB (photos)
@@ -301,7 +303,7 @@
       el.classList.toggle("is-active", k === name)
     );
     if (name === "camera") { ensureCamera(); acquireWakeLock(); }
-    if (name === "gallery") renderGallery();
+    if (name === "gallery") { renderGallery(); loadDeveloped(); }
     // Pause camera stream when leaving the finder to save battery
     if (name !== "camera") { setTorch(false); releaseWakeLock(); }
   }
@@ -832,7 +834,7 @@
         '<span class="dev-cell__meta">' + String(i + 1).padStart(2, "0") + "</span>" +
         '<div class="dev-cell__bar"><i></i></div>';
       on(cell, "click", () => {
-        if (cell.classList.contains("is-ready")) openLightbox(p.url);
+        if (cell.classList.contains("is-ready")) openLightbox(devUrl(p) || p.url, p.filename);
       });
       grid.appendChild(cell);
     });
@@ -853,7 +855,12 @@
           if (st) st.textContent = "Entwickelt";
           // Clear the inline blur so the CSS reveal (.is-ready img) can take over.
           const rImg = cell.querySelector("img");
-          if (rImg) rImg.style.filter = "";
+          if (rImg) {
+            rImg.style.filter = "";
+            // Falls das entwickelte (gefilterte) Bild schon vorliegt, es zeigen.
+            const dev = devUrl(rec);
+            if (dev && rImg.getAttribute("src") !== dev) rImg.src = dev;
+          }
         }
         return;
       }
@@ -877,8 +884,44 @@
     if (views.gallery.classList.contains("is-active")) tick();
   }, 1000);
 
+  /* ---------- Entwickelte (gefilterte) Bilder vom Server ----------
+     Nach dem 48-h-Reveal zeigen wir statt des lokalen Originals das im Backend
+     entwickelte Bild (LUT + Filmkorn). /gallery liefert kurzlebige signierte
+     Links; Zuordnung über den Dateinamen (= Upload-filename). */
+  function devUrl(rec) {
+    return rec && rec.filename ? (state.developed[rec.filename] || null) : null;
+  }
+
+  async function loadDeveloped() {
+    if (!uploadEnabled()) return;
+    const g = state.guest || {};
+    if (!g.eventId || !g.sbGuestId) return;
+    try {
+      const r = await fetch(DEVELOP_SERVER_URL + "/gallery?eventId=" +
+        encodeURIComponent(g.eventId) + "&guestId=" + encodeURIComponent(g.sbGuestId));
+      if (!r.ok) return;
+      const data = await r.json();
+      (data.photos || []).forEach((p) => {
+        if (p && p.filename && p.url) state.developed[p.filename] = p.url;
+      });
+      applyDeveloped();
+    } catch (e) { /* still: lokales Original bleibt sichtbar */ }
+  }
+
+  // Bereits enthüllte Zellen auf das entwickelte Bild umstellen, sobald vorhanden.
+  function applyDeveloped() {
+    document.querySelectorAll(".dev-cell.is-ready").forEach((cell) => {
+      const rec = state.photos.find((p) => p.id === cell.dataset.id);
+      const dev = devUrl(rec);
+      if (!dev) return;
+      const img = cell.querySelector("img");
+      if (img && img.getAttribute("src") !== dev) img.src = dev;
+    });
+  }
+
   /* ---------- Lightbox ---------- */
-  function openLightbox(url) {
+  function openLightbox(url, name) {
+    lbUrl = url; lbName = name || "lumave-foto.jpg";
     const lb = $("lightbox");
     $("lightboxImg").src = url;
     lb.classList.add("is-open");
@@ -886,6 +929,20 @@
   }
   function closeLightbox() {
     $("lightbox").classList.remove("is-open");
+  }
+
+  // Download des aktuell gezeigten Bildes. Entwickelte (http-)Bilder bekommen
+  // ein &download=… (Supabase setzt dann Content-Disposition: attachment, auch
+  // cross-origin); lokale Blob-URLs lädt das download-Attribut direkt.
+  function downloadCurrent() {
+    if (!lbUrl) return;
+    let href = lbUrl;
+    if (/^https?:/i.test(lbUrl)) {
+      href = lbUrl + (lbUrl.indexOf("?") >= 0 ? "&" : "?") + "download=" + encodeURIComponent(lbName);
+    }
+    const a = document.createElement("a");
+    a.href = href; a.download = lbName;
+    document.body.appendChild(a); a.click(); a.remove();
   }
 
   /* ============================================================
@@ -921,6 +978,7 @@
     on($("camRetry"), "click", () => { state.stream = null; ensureCamera(); });
 
     on($("lightboxClose"), "click", closeLightbox);
+    on($("lightboxDl"), "click", downloadCurrent);
     on($("lightbox"), "click", (e) => { if (e.target === $("lightbox")) closeLightbox(); });
     on(document, "keydown", (e) => {
       if (e.key === "Escape") { closeLightbox(); closeFlashWarn(); }

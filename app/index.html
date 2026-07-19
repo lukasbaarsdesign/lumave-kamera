@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <style>html,body{background:#040404;}</style>
   <link rel="preload" href="../assets/fonts/HostGrotesk.ttf" as="font" type="font/ttf" crossorigin />
-  <link rel="stylesheet" href="app.css?v=18" />
+  <link rel="stylesheet" href="app.css?v=19" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -211,11 +211,15 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
       <img id="lightboxImg" alt="Entwickeltes Hochzeitsfoto" />
+      <button class="lightbox__dl" id="lightboxDl" type="button" aria-label="Foto herunterladen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+        <span>Speichern</span>
+      </button>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </main>
 
-  <script src="app.js?v=20"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>
