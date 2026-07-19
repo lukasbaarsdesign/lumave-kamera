@@ -28,9 +28,11 @@
     .replace(/[^a-z0-9-]/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")
     .toLowerCase() || "test-hochzeit";
   const uploadEnabled = () => /^https:\/\//.test(DEVELOP_SERVER_URL);
-  const CAPTURE_W = 1638;
-  const CAPTURE_H = 2048; // 4:5-Filmformat, lange Kante 2048 px
-  const JPEG_QUALITY = 0.85;
+  const CAPTURE_W = 2048;
+  const CAPTURE_H = 2560; // 4:5-Filmformat, lange Kante 2560 px (vorher 2048)
+  // Auflösung +56 %, Qualität leicht getrimmt (0.85 → 0.82), damit die
+  // Dateigröße/Upload-Dauer bei schwachem Empfang nicht zu stark steigt.
+  const JPEG_QUALITY = 0.82;
   const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   /* ---------- Tiny DOM helpers ---------- */
